@@ -9,9 +9,9 @@ package io.joyrpc.spring;
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,122 +20,98 @@ package io.joyrpc.spring;
  * #L%
  */
 
+import io.joyrpc.annotation.Alias;
 import io.joyrpc.config.ConsumerGroupConfig;
-import io.joyrpc.config.RegistryConfig;
-import io.joyrpc.spring.event.ConsumerReferDoneEvent;
-import io.joyrpc.constants.ExceptionCode;
-import io.joyrpc.exception.InitializationException;
-import io.joyrpc.util.Switcher;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.BeanNameAware;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.FactoryBean;
 import org.springframework.beans.factory.InitializingBean;
-import org.springframework.context.*;
-import org.springframework.context.event.ContextRefreshedEvent;
+import org.springframework.context.ApplicationContext;
+import org.springframework.context.ApplicationContextAware;
+import org.springframework.context.ApplicationEvent;
+import org.springframework.context.ApplicationListener;
 
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 
 
 /**
  * 消费组
  */
 public class ConsumerGroupBean<T> extends ConsumerGroupConfig<T> implements InitializingBean, FactoryBean,
-        ApplicationContextAware, DisposableBean, BeanNameAware, ApplicationListener<ContextRefreshedEvent>, ApplicationEventPublisherAware {
+        ApplicationContextAware, DisposableBean, BeanNameAware, ApplicationListener {
 
     /**
-     * slf4j logger for this class
+     * spring处理器
      */
-    private final static Logger logger = LoggerFactory.getLogger(ConsumerGroupBean.class);
-    /**
-     * spring上下文
-     */
-    protected transient ApplicationContext applicationContext;
-    /**
-     * 实例
-     */
-    protected transient T object;
-    /**
-     * 事件发布器
-     */
-    protected transient ApplicationEventPublisher applicationEventPublisher;
-    /**
-     * 开关
-     */
-    protected Switcher switcher = new Switcher();
-
-    protected transient CountDownLatch latch = new CountDownLatch(1);
+    protected transient ConsumerSpring<T> spring;
 
     /**
      * 默认构造函数
      */
     public ConsumerGroupBean() {
-
+        this.spring = new ConsumerSpring<>(this);
     }
 
     @Override
     public void setBeanName(String name) {
-        this.id = name;
+        spring.setBeanName(name);
     }
 
     @Override
-    public void setApplicationContext(final ApplicationContext appContext) throws BeansException {
-        this.applicationContext = appContext;
+    public void setApplicationContext(ApplicationContext context) {
+        spring.setApplicationContext(context);
     }
 
     @Override
-    public T getObject() {
-        return object;
-    }
-
-    @Override
-    public void afterPropertiesSet() {
-        // 如果没有配置注册中心，则默认订阅全部注册中心
-        if (getRegistry() == null) {
-            setRegistry(applicationContext.getBeansOfType(RegistryConfig.class, false, false));
-        }
-        referCounter.incrementAndGet();
-        CompletableFuture<Void> openFuture = new CompletableFuture<>();
-        openFuture.whenComplete((v, t) -> latch.countDown());
-        object = refer(openFuture);
+    public T getObject() throws ExecutionException, InterruptedException {
+        return spring.getObject();
     }
 
     @Override
     public Class getObjectType() {
-        return getProxyClass();
+        return spring.getObjectType();
     }
 
     @Override
     public boolean isSingleton() {
-        return true;
+        return spring.isSingleton();
     }
 
     @Override
     public void destroy() {
-        logger.info("destroy consumer group with bean name : {}", id);
-        //TODO 如何做到优雅停机
-        super.unrefer();
+        spring.destroy();
     }
 
     @Override
-    public void onApplicationEvent(ContextRefreshedEvent event) {
-        switcher.open(() -> {
-            try {
-                latch.await();
-                if (referCounter.decrementAndGet() == 0) {
-                    applicationEventPublisher.publishEvent(new ConsumerReferDoneEvent(true));
-                }
-            } catch (InterruptedException e) {
-                throw new InitializationException("wait refer error", ExceptionCode.CONSUMER_REFER_WAIT_ERROR);
-            }
-        });
+    public void onApplicationEvent(final ApplicationEvent event) {
+        spring.onApplicationEvent(event);
     }
 
     @Override
-    public void setApplicationEventPublisher(ApplicationEventPublisher applicationEventPublisher) {
-        this.applicationEventPublisher = applicationEventPublisher;
+    public void afterPropertiesSet() {
+        spring.afterPropertiesSet();
     }
+
+    public String getName() {
+        return id;
+    }
+
+    public String getRegistryName() {
+        return spring.getRegistryName();
+    }
+
+    @Alias("registry")
+    public void setRegistryName(String registryName) {
+        spring.setRegistryName(registryName);
+    }
+
+    public String getConfigureName() {
+        return spring.getConfigureName();
+    }
+
+    @Alias("configure")
+    public void setConfigureName(String configureName) {
+        spring.setConfigureName(configureName);
+    }
+
 }

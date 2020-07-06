@@ -9,9 +9,9 @@ package io.joyrpc.transport.channel;
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -26,7 +26,6 @@ import io.joyrpc.transport.message.Message;
 import io.joyrpc.transport.session.SessionManager;
 
 import java.net.InetSocketAddress;
-import java.util.List;
 import java.util.function.Consumer;
 
 /**
@@ -41,18 +40,8 @@ public class DecoratorChannel implements Channel {
     }
 
     @Override
-    public void send(final Object object) {
-        channel.send(object);
-    }
-
-    @Override
     public void send(final Object object, final Consumer<SendResult> consumer) {
         channel.send(object, consumer);
-    }
-
-    @Override
-    public void sendList(final List<Object> objects) {
-        channel.sendList(objects);
     }
 
     @Override
@@ -63,16 +52,6 @@ public class DecoratorChannel implements Channel {
     @Override
     public void close(final Consumer<AsyncResult<Channel>> consumer) {
         channel.close(consumer);
-    }
-
-    @Override
-    public boolean disconnect() {
-        return channel.disconnect();
-    }
-
-    @Override
-    public void disconnect(final Consumer<AsyncResult<Channel>> consumer) {
-        channel.disconnect(consumer);
     }
 
     @Override
@@ -101,8 +80,8 @@ public class DecoratorChannel implements Channel {
     }
 
     @Override
-    public void setAttribute(final String key, final Object value) {
-        channel.setAttribute(key, value);
+    public Channel setAttribute(final String key, final Object value) {
+        return channel.setAttribute(key, value);
     }
 
     @Override
@@ -111,7 +90,7 @@ public class DecoratorChannel implements Channel {
     }
 
     @Override
-    public FutureManager<Integer, Message> getFutureManager() {
+    public FutureManager<Long, Message> getFutureManager() {
         return channel.getFutureManager();
     }
 

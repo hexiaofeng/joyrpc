@@ -9,9 +9,9 @@ package io.joyrpc.protocol.grpc;
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -27,19 +27,19 @@ import io.joyrpc.extension.condition.ConditionalOnClass;
 import io.joyrpc.protocol.AbstractProtocol;
 import io.joyrpc.protocol.ClientProtocol;
 import io.joyrpc.protocol.MsgType;
-import io.joyrpc.protocol.grpc.handler.GrpcClientConvertHandler;
+import io.joyrpc.protocol.grpc.handler.GrpcClientHandler;
 import io.joyrpc.protocol.handler.RequestChannelHandler;
 import io.joyrpc.protocol.handler.ResponseChannelHandler;
 import io.joyrpc.protocol.message.MessageHeader;
 import io.joyrpc.protocol.message.ResponseMessage;
 import io.joyrpc.protocol.message.negotiation.NegotiationResponse;
-import io.joyrpc.transport.session.DefaultSession;
 import io.joyrpc.transport.Client;
 import io.joyrpc.transport.channel.Channel;
 import io.joyrpc.transport.channel.ChannelHandlerChain;
 import io.joyrpc.transport.codec.Codec;
 import io.joyrpc.transport.codec.Http2Codec;
 import io.joyrpc.transport.message.Message;
+import io.joyrpc.transport.session.DefaultSession;
 import io.joyrpc.transport.session.Session;
 
 import java.util.Arrays;
@@ -71,13 +71,11 @@ public class GrpcClientProtocol extends AbstractProtocol implements ClientProtoc
 
     @Override
     public ChannelHandlerChain buildChain() {
-        if (chain == null) {
-            chain = new ChannelHandlerChain()
-                    .addLast(new GrpcClientConvertHandler())
-                    .addLast(new RequestChannelHandler<>(MESSAGE_HANDLER_SELECTOR, this::onException))
-                    .addLast(new ResponseChannelHandler());
-        }
-        return chain;
+        //GrpcClientConvertHandler 会有消息缓存，为防止streamId冲突，这里多个channel不能共用一个chain，每次重新build
+        return new ChannelHandlerChain()
+                .addLast(new GrpcClientHandler())
+                .addLast(new RequestChannelHandler<>(MESSAGE_HANDLER_SELECTOR, this::onException))
+                .addLast(new ResponseChannelHandler());
     }
 
     @Override
@@ -86,7 +84,7 @@ public class GrpcClientProtocol extends AbstractProtocol implements ClientProtoc
     }
 
     @Override
-    public Message negotiation(URL clusterUrl, final Client client) {
+    public Message negotiate(URL clusterUrl, final Client client) {
         NegotiationResponse response = new NegotiationResponse();
         //设置可用的序列化插件
         response.setSerializations(SERIALIZATIONS);

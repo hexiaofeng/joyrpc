@@ -9,9 +9,9 @@ package io.joyrpc.transport.channel;
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -29,7 +29,7 @@ import io.joyrpc.transport.session.SessionManager;
 
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
-import java.util.List;
+import java.util.function.BiPredicate;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -46,15 +46,11 @@ public interface Channel {
 
     String SERVER_CHANNEL = "SERVER_CHANNEL";
 
-    String HEARTBEAT_FAILED_COUNT = "heartbeat.failed.count";
-
     String CHANNEL_KEY = "CHANNEL_KEY";
 
     String PROTOCOL = "PROTOCOL";
 
     String PAYLOAD = "PAYLOAD";
-
-    String IS_SERVER = "IS_SERVER";
 
     String EVENT_PUBLISHER = "EVENT_PUBLISHER";
 
@@ -89,7 +85,9 @@ public interface Channel {
      *
      * @param object
      */
-    void send(Object object);
+    default void send(Object object) {
+        send(object, null);
+    }
 
     /**
      * 发送一个object信息
@@ -98,13 +96,6 @@ public interface Channel {
      * @param consumer
      */
     void send(Object object, Consumer<SendResult> consumer);
-
-    /**
-     * 批量发送消息
-     *
-     * @param objects 消息列表
-     */
-    void sendList(List<Object> objects);
 
     /**
      * 关闭channel
@@ -119,21 +110,6 @@ public interface Channel {
      * @param consumer
      */
     void close(Consumer<AsyncResult<Channel>> consumer);
-
-    /**
-     * 断开channel
-     *
-     * @return
-     */
-    boolean disconnect();
-
-    /**
-     * 异步断开channel
-     *
-     * @param consumer
-     * @return
-     */
-    void disconnect(Consumer<AsyncResult<Channel>> consumer);
 
     /**
      * 获取本地地址
@@ -210,8 +186,24 @@ public interface Channel {
      *
      * @param key
      * @param value
+     * @return
      */
-    void setAttribute(String key, Object value);
+    Channel setAttribute(String key, Object value);
+
+    /**
+     * 设置属性
+     *
+     * @param key
+     * @param value
+     * @param predicate
+     * @return
+     */
+    default Channel setAttribute(final String key, final Object value, final BiPredicate<String, Object> predicate) {
+        if (predicate.test(key, value)) {
+            return setAttribute(key, value);
+        }
+        return this;
+    }
 
     /**
      * 删除属性
@@ -224,9 +216,9 @@ public interface Channel {
     /**
      * 获取Future管理器
      *
-     * @return
+     * @return Future管理器
      */
-    FutureManager<Integer, Message> getFutureManager();
+    FutureManager<Long, Message> getFutureManager();
 
     /**
      * 申请一个ChannelBuffer
@@ -259,22 +251,69 @@ public interface Channel {
      */
     SessionManager getSessionManager();
 
+    /**
+     * 是否是服务端
+     *
+     * @return
+     */
     boolean isServer();
 
-    default Session getSession(int sessionId) {
+    /**
+     * 获取会话
+     *
+     * @param sessionId
+     * @return
+     */
+    default Session getSession(final int sessionId) {
         return getSessionManager().get(sessionId);
     }
 
-    default Session addSession(int sessionId, Session session) {
+    /**
+     * 设置会话
+     *
+     * @param sessionId
+     * @param session
+     * @return
+     */
+    default Session addSession(final int sessionId, final Session session) {
         return getSessionManager().put(sessionId, session);
     }
 
-    default Session addIfAbsentSession(int sessionId, Session session) {
+    /**
+     * 添加会话
+     *
+     * @param sessionId
+     * @param session
+     * @return
+     */
+    default Session addIfAbsentSession(final int sessionId, final Session session) {
         return getSessionManager().putIfAbsent(sessionId, session);
     }
 
-    default Session removeSession(int sessionId) {
+    /**
+     * 删除会话
+     *
+     * @param sessionId
+     * @return
+     */
+    default Session removeSession(final int sessionId) {
         return getSessionManager().remove(sessionId);
+    }
+
+    /**
+     * 驱逐过期会话
+     */
+    default void evictSession() {
+        getSessionManager().evict();
+    }
+
+    /**
+     * 会话心跳
+     *
+     * @param sessionId
+     */
+    default boolean beatSession(final int sessionId) {
+        return getSessionManager().beat(sessionId);
     }
 
     /**

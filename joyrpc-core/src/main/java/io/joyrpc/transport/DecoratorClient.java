@@ -9,9 +9,9 @@ package io.joyrpc.transport;
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -35,6 +35,7 @@ import io.joyrpc.transport.heartbeat.HeartbeatStrategy;
 import io.joyrpc.transport.message.Message;
 import io.joyrpc.transport.session.Session;
 import io.joyrpc.transport.transport.ClientTransport;
+import io.joyrpc.util.Status;
 
 import java.net.InetSocketAddress;
 import java.util.Objects;
@@ -142,26 +143,6 @@ public class DecoratorClient<T extends ClientTransport> implements Client {
     }
 
     @Override
-    public boolean disconnect() {
-        return transport.disconnect();
-    }
-
-    @Override
-    public void disconnect(final Consumer<AsyncResult<Channel>> consumer) {
-        transport.disconnect(consumer);
-    }
-
-    @Override
-    public void reconnect() throws ConnectionException, InterruptedException {
-        transport.reconnect();
-    }
-
-    @Override
-    public void reconnect(final BiConsumer<Channel, Throwable> action) {
-        transport.reconnect(action);
-    }
-
-    @Override
     public URL getUrl() {
         return url;
     }
@@ -258,5 +239,10 @@ public class DecoratorClient<T extends ClientTransport> implements Client {
             protocol = transport.getProtocol();
         }
         return protocol;
+    }
+
+    @Override
+    public int getRequests() {
+        return transport.getRequests();
     }
 }

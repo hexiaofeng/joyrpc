@@ -9,9 +9,9 @@ package io.joyrpc.spring;
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,122 +20,133 @@ package io.joyrpc.spring;
  * #L%
  */
 
+import io.joyrpc.annotation.Alias;
 import io.joyrpc.config.ConsumerConfig;
-import io.joyrpc.config.RegistryConfig;
-import io.joyrpc.spring.event.ConsumerReferDoneEvent;
-import io.joyrpc.constants.ExceptionCode;
-import io.joyrpc.exception.InitializationException;
-import io.joyrpc.util.Switcher;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.BeansException;
+import io.joyrpc.config.ParameterConfig;
+import io.joyrpc.util.StringUtils;
 import org.springframework.beans.factory.BeanNameAware;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.FactoryBean;
 import org.springframework.beans.factory.InitializingBean;
-import org.springframework.context.*;
-import org.springframework.context.event.ContextRefreshedEvent;
+import org.springframework.context.ApplicationContext;
+import org.springframework.context.ApplicationContextAware;
+import org.springframework.context.ApplicationEvent;
+import org.springframework.context.ApplicationListener;
 
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CountDownLatch;
+import java.util.List;
+import java.util.concurrent.ExecutionException;
 
 /**
  * 消费者
  */
 public class ConsumerBean<T> extends ConsumerConfig<T> implements InitializingBean, FactoryBean,
-        ApplicationContextAware, DisposableBean, BeanNameAware, ApplicationListener<ContextRefreshedEvent>, ApplicationEventPublisherAware {
+        ApplicationContextAware, DisposableBean, BeanNameAware, ApplicationListener {
 
     /**
-     * slf4j logger for this class
+     * 参数配置
      */
-    private final static Logger logger = LoggerFactory.getLogger(ConsumerBean.class);
+    protected List<ParameterConfig> params;
+
     /**
-     * spring的上下文
+     * spring处理器
      */
-    protected transient ApplicationContext applicationContext;
-    /**
-     * 工厂实例化的对象
-     */
-    protected transient T object;
-    /**
-     * 事件发布器
-     */
-    protected transient ApplicationEventPublisher applicationEventPublisher;
-    /**
-     * 等待完成
-     */
-    protected transient CountDownLatch latch = new CountDownLatch(1);
-    /**
-     * 开关
-     */
-    protected Switcher switcher = new Switcher();
+    protected transient ConsumerSpring<T> spring;
 
     /**
      * 默认构造函数，不允许从外部new
      */
     public ConsumerBean() {
+        spring = new ConsumerSpring<>(this);
     }
+
 
     @Override
     public void setBeanName(String name) {
-        this.id = name;
+        spring.setBeanName(name);
     }
 
     @Override
-    public void setApplicationContext(ApplicationContext appContext) throws BeansException {
-        this.applicationContext = appContext;
+    public void setApplicationContext(ApplicationContext context) {
+        spring.setApplicationContext(context);
     }
 
     @Override
-    public T getObject() {
-        return object;
-    }
-
-    @Override
-    public void onApplicationEvent(final ContextRefreshedEvent contextRefreshedEvent) {
-        switcher.open(() -> {
-            try {
-                latch.await();
-                if (referCounter.decrementAndGet() == 0) {
-                    applicationEventPublisher.publishEvent(new ConsumerReferDoneEvent(true));
-                }
-            } catch (InterruptedException e) {
-                throw new InitializationException("wait refer error", ExceptionCode.CONSUMER_REFER_WAIT_ERROR);
-            }
-        });
-    }
-
-    @Override
-    public void afterPropertiesSet() throws Exception {
-        //在setApplicationContext调用
-        // 如果没有配置注册中心，则默认订阅全部注册中心
-        if (getRegistry() == null) {
-            setRegistry(applicationContext.getBeansOfType(RegistryConfig.class, false, false));
-        }
-        referCounter.incrementAndGet();
-        CompletableFuture<Void> openFuture = new CompletableFuture<>();
-        openFuture.whenComplete((v, t) -> latch.countDown());
-        object = refer(openFuture);
+    public T getObject() throws ExecutionException, InterruptedException {
+        return spring.getObject();
     }
 
     @Override
     public Class getObjectType() {
-        return getProxyClass();
+        return spring.getObjectType();
     }
 
     @Override
     public boolean isSingleton() {
-        return true;
+        return spring.isSingleton();
     }
 
     @Override
     public void destroy() {
-        logger.info(String.format("destroy consumer with bean name : %s", id));
-        unrefer();
+        spring.destroy();
     }
 
     @Override
-    public void setApplicationEventPublisher(ApplicationEventPublisher applicationEventPublisher) {
-        this.applicationEventPublisher = applicationEventPublisher;
+    public void onApplicationEvent(final ApplicationEvent event) {
+        spring.onApplicationEvent(event);
     }
+
+    @Override
+    public void afterPropertiesSet() {
+        spring.afterPropertiesSet();
+    }
+
+    @Override
+    public String getId() {
+        return id;
+    }
+
+    public String getName() {
+        return id;
+    }
+
+    public void setName(String name) {
+        this.id = name;
+    }
+
+    public String getRegistryName() {
+        return spring.getRegistryName();
+    }
+
+    @Alias("registry")
+    public void setRegistryName(String registryName) {
+        spring.setRegistryName(registryName);
+    }
+
+    public String getConfigureName() {
+        return spring.getConfigureName();
+    }
+
+    @Alias("configure")
+    public void setConfigureName(String configureName) {
+        spring.setConfigureName(configureName);
+    }
+
+    public List<ParameterConfig> getParams() {
+        return params;
+    }
+
+    public void setParams(List<ParameterConfig> params) {
+        this.params = params;
+        if (params != null) {
+            params.forEach(param -> {
+                if (param != null
+                        && StringUtils.isNotEmpty(param.getKey())
+                        && StringUtils.isNotEmpty(param.getValue())) {
+                    String key = param.isHide() && !param.getKey().startsWith(".") ? "." + param.getKey() : param.getKey();
+                    setParameter(key, param.getValue());
+                }
+            });
+        }
+    }
+
 }

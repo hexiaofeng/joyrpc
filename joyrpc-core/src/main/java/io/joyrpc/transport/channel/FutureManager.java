@@ -9,9 +9,9 @@ package io.joyrpc.transport.channel;
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,107 +20,122 @@ package io.joyrpc.transport.channel;
  * #L%
  */
 
+import io.joyrpc.exception.ChannelClosedException;
 import io.joyrpc.transport.session.Session;
 import io.joyrpc.util.SystemClock;
+import io.joyrpc.util.Timer.TimeTask;
 
-import java.util.Iterator;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
+import static io.joyrpc.constants.Constants.FUTURE_TIMEOUT_PREFIX;
+import static io.joyrpc.util.Timer.timer;
+
 /**
- * @date: 2019/1/14
+ * Future管理器，绑定到Channel上
  */
 public class FutureManager<I, M> {
-
-    protected FutureTimeoutManager timeoutManager;
+    /**
+     * 通道
+     */
+    protected Channel channel;
+    /**
+     * ID生成器
+     */
+    protected Supplier<I> idGenerator;
+    /**
+     * 计数器
+     */
+    protected AtomicInteger counter = new AtomicInteger();
+    /**
+     * 消费者
+     */
+    protected Consumer<I> consumer;
     /**
      * Future管理，有些连接并发很少不需要初始化
      */
     protected Map<I, EnhanceCompletableFuture<I, M>> futures = new ConcurrentHashMap<>();
 
-    protected Supplier<I> idGenerator;
-    /**
-     * 清理工作
-     */
-    protected Runnable checker;
-    /**
-     * 计数器
-     */
-    protected AtomicInteger counter = new AtomicInteger();
-
     /**
      * 构造函数
      *
+     * @param channel
      * @param idGenerator
      */
-    public FutureManager(final Supplier<I> idGenerator) {
-        this(idGenerator, null);
-    }
-
-    /**
-     * 构造函数
-     *
-     * @param idGenerator
-     * @param timeoutManager
-     */
-    public FutureManager(final Supplier<I> idGenerator, final FutureTimeoutManager timeoutManager) {
+    public FutureManager(final Channel channel, final Supplier<I> idGenerator) {
+        this.channel = channel;
         this.idGenerator = idGenerator;
-        this.checker = this::check;
-        this.timeoutManager = timeoutManager == null ? FutureTimeoutManager.INSTANCE : timeoutManager;
-    }
-
-    /**
-     * 超时检查
-     */
-    protected void check() {
-        if (counter.get() == 0) {
-            return;
-        }
-        //定时遍历
-        Iterator<Map.Entry<I, EnhanceCompletableFuture<I, M>>> iterator = futures.entrySet().iterator();
-        Map.Entry<I, EnhanceCompletableFuture<I, M>> entry;
-        EnhanceCompletableFuture<I, M> future;
-        while (iterator.hasNext()) {
-            entry = iterator.next();
-            future = entry.getValue();
-            //已经超时，处理
-            if (future.isExpire() && !future.isDone()) {
-                if (futures.remove(entry.getKey()) != null) {
-                    counter.decrementAndGet();
-                    //超时，并且没有complicated，complicated一个超时异常
-                    future.completeExceptionally(new TimeoutException("future is timeout."));
-                }
+        this.consumer = id -> {
+            EnhanceCompletableFuture<I, M> future = futures.remove(id);
+            if (future != null) {
+                counter.decrementAndGet();
+                //超时
+                future.completeExceptionally(new TimeoutException("future is timeout."));
             }
-        }
+        };
     }
 
     /**
      * 创建一个future
      *
-     * @param messageId
-     * @param timeoutMillis
-     * @return
+     * @param messageId     消息ID
+     * @param timeoutMillis 超时时间（毫秒）
+     * @return 完成状态
      */
     public EnhanceCompletableFuture<I, M> create(final I messageId, final long timeoutMillis) {
-        return create(messageId, timeoutMillis, null);
+        return create(messageId, timeoutMillis, null, null, null);
     }
 
     /**
      * 创建一个future
      *
-     * @param messageId
-     * @param timeoutMillis
-     * @param session
-     * @return
+     * @param messageId     消息ID
+     * @param timeoutMillis 超时时间（毫秒）
+     * @param afterRun      结束后执行
+     * @return 完成状态
      */
-    public EnhanceCompletableFuture<I, M> create(final I messageId, final long timeoutMillis, final Session session) {
+    public EnhanceCompletableFuture<I, M> create(final I messageId, final long timeoutMillis,
+                                                 final BiConsumer<M, Throwable> afterRun) {
+        return create(messageId, timeoutMillis, null, null, afterRun);
+    }
+
+    /**
+     * 创建一个future
+     *
+     * @param messageId     消息ID
+     * @param timeoutMillis 超时时间
+     * @param session       会话
+     * @param requests      正在处理的请求数
+     * @return 完成状态
+     */
+    public EnhanceCompletableFuture<I, M> create(final I messageId, final long timeoutMillis,
+                                                 final Session session, final AtomicInteger requests) {
+        return create(messageId, timeoutMillis, session, requests, null);
+    }
+
+    /**
+     * 创建一个future
+     *
+     * @param messageId     消息ID
+     * @param timeoutMillis 超时时间
+     * @param session       会话
+     * @param requests      正在处理的请求数
+     * @param afterRun      结束后执行
+     * @return 完成状态
+     */
+    public EnhanceCompletableFuture<I, M> create(final I messageId, final long timeoutMillis,
+                                                 final Session session, final AtomicInteger requests,
+                                                 final BiConsumer<M, Throwable> afterRun) {
         return futures.computeIfAbsent(messageId, o -> {
             //增加计数器
             counter.incrementAndGet();
-            return new EnhanceCompletableFuture<>(o, session, SystemClock.now() + timeoutMillis);
+            TimeTask task = new FutureTimeoutTask<>(messageId, SystemClock.now() + timeoutMillis, consumer);
+            return new EnhanceCompletableFuture<>(o, session, timer().add(task), requests, afterRun);
         });
     }
 
@@ -135,50 +150,131 @@ public class FutureManager<I, M> {
     }
 
     /**
-     * 根据msgId移除掉一个Future
+     * 正常结束
      *
-     * @param messageId
-     * @return
+     * @param messageId 消息ID
+     * @param message   消息
+     * @return 成功标识
      */
-    public EnhanceCompletableFuture<I, M> remove(final I messageId) {
+    public boolean complete(final I messageId, final M message) {
         EnhanceCompletableFuture<I, M> result = futures.remove(messageId);
         if (result != null) {
             //减少计数器
             counter.decrementAndGet();
+            return result.complete(message);
         }
-        return result;
+        return false;
+    }
+
+    /**
+     * 异常结束
+     *
+     * @param messageId 消息ID
+     * @param throwable 异常
+     * @return 成功标识
+     */
+    public boolean completeExceptionally(final I messageId, final Throwable throwable) {
+        EnhanceCompletableFuture<I, M> result = futures.remove(messageId);
+        if (result != null) {
+            //减少计数器
+            counter.decrementAndGet();
+            return result.completeExceptionally(throwable);
+        }
+        return false;
     }
 
     /**
      * 开启FutureManager（注册timeout事件）
      */
     public void open() {
-        this.timeoutManager.register(checker);
     }
 
     /**
-     * 清空这个manager下所有的Future
-     *
-     * @return
+     * 清空
      */
-    public Map<I, EnhanceCompletableFuture<I, M>> close() {
+    public void close() {
         Map<I, EnhanceCompletableFuture<I, M>> futures = this.futures;
-        timeoutManager.deregister(checker);
         this.futures = new ConcurrentHashMap<>();
         this.counter = new AtomicInteger();
-        return futures;
+        Exception exception = new ChannelClosedException("channel is inactive, address is " + channel.getRemoteAddress());
+        futures.forEach((id, future) -> future.completeExceptionally(exception));
+        futures.clear();
     }
 
+    /**
+     * 生成消息ID
+     *
+     * @return 消息ID
+     */
     public I generateId() {
         return idGenerator.get();
     }
 
+    /**
+     * 待应答的请求数
+     *
+     * @return 应答的请求数
+     */
     public int size() {
-        return futures.size();
+        return counter.get();
     }
 
+    /**
+     * 请求数是否为空
+     *
+     * @return 请求数为空标识
+     */
     public boolean isEmpty() {
-        return futures.isEmpty();
+        return counter.get() == 0;
+    }
+
+    /**
+     * Future超时检查任务
+     *
+     * @param <I>
+     */
+    protected static class FutureTimeoutTask<I> implements TimeTask {
+
+        /**
+         * 消息ID
+         */
+        protected I messageId;
+        /**
+         * 时间
+         */
+        protected long time;
+        /**
+         * 执行回调的消费者
+         */
+        protected Consumer<I> consumer;
+
+        /**
+         * 构造函数
+         *
+         * @param messageId 消息ID
+         * @param time      执行时间
+         * @param consumer  消费者
+         */
+        public FutureTimeoutTask(I messageId, long time, Consumer<I> consumer) {
+            this.messageId = messageId;
+            this.time = time;
+            this.consumer = consumer;
+        }
+
+        @Override
+        public String getName() {
+            return FUTURE_TIMEOUT_PREFIX + messageId.toString();
+        }
+
+        @Override
+        public long getTime() {
+            return time;
+        }
+
+        @Override
+        public void run() {
+            consumer.accept(messageId);
+        }
     }
 
 }

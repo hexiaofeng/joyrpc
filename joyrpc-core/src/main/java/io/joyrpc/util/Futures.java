@@ -9,9 +9,9 @@ package io.joyrpc.util;
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,11 +20,14 @@ package io.joyrpc.util;
  * #L%
  */
 
+import io.joyrpc.event.AsyncResult;
+
 import java.util.Collection;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Consumer;
 
 /**
  * Future工具类
@@ -39,13 +42,15 @@ public class Futures {
      * @param <T>
      */
     public static <T> void chain(final CompletableFuture<T> future, final CompletableFuture<T> then) {
-        future.whenComplete((v, t) -> {
-            if (t == null) {
-                then.complete(v);
-            } else {
-                then.completeExceptionally(t);
-            }
-        });
+        if (then != null) {
+            future.whenComplete((v, t) -> {
+                if (t == null) {
+                    then.complete(v);
+                } else {
+                    then.completeExceptionally(t);
+                }
+            });
+        }
     }
 
     /**
@@ -109,7 +114,9 @@ public class Futures {
             case 0:
                 return CompletableFuture.completedFuture(null);
             case 1:
-                return futures.iterator().next().thenApply(o -> null);
+                CompletableFuture future = new CompletableFuture();
+                Futures.chain(futures.iterator().next(), future);
+                return future;
             default:
                 return CompletableFuture.allOf(futures.toArray(new CompletableFuture[futures.size()]));
         }
@@ -162,6 +169,84 @@ public class Futures {
         thread.start();
         future.whenComplete((v, t) -> latch.countDown());
         return future;
+    }
+
+    /**
+     * 把消费者和Future组合成链
+     *
+     * @param consumer 消费者
+     * @param future   Future
+     * @param <T>
+     * @return 消费者
+     */
+    public static <T> Consumer<AsyncResult<T>> chain(final Consumer<AsyncResult<T>> consumer, final CompletableFuture<T> future) {
+        Consumer<AsyncResult<T>> c = consumer == null ? r -> {
+        } : consumer;
+        return future == null ? c : c.andThen(o -> {
+            if (o.isSuccess()) {
+                future.complete(o.getResult());
+            } else {
+                future.completeExceptionally(o.getThrowable());
+            }
+        });
+    }
+
+    /**
+     * 把消费者和Future组合成链
+     *
+     * @param future   Future
+     * @param consumer 消费者
+     * @param <T>
+     * @return 消费者
+     */
+    public static <T> CompletableFuture<T> chain(final CompletableFuture<T> future, final Consumer<AsyncResult<T>> consumer) {
+        return consumer == null ? future : future.whenComplete((v, t) -> {
+            if (t == null) {
+                consumer.accept(new AsyncResult<>(v));
+            } else {
+                consumer.accept(new AsyncResult<>(v, t));
+            }
+        });
+    }
+
+    /**
+     * 捕获异常
+     *
+     * @param executor 消费者
+     * @param <T>
+     * @return
+     */
+    public static <T> CompletableFuture<T> call(final Executor<T> executor) {
+        CompletableFuture<T> future = new CompletableFuture<>();
+        try {
+            executor.execute(future);
+        } catch (Exception e) {
+            executor.onException(e);
+            future.completeExceptionally(e);
+        }
+        return future;
+    }
+
+    @FunctionalInterface
+    public static interface Executor<T> {
+
+        /**
+         * 执行
+         *
+         * @param future
+         * @throws Exception
+         */
+        void execute(CompletableFuture<T> future) throws Exception;
+
+        /**
+         * 异常
+         *
+         * @param e
+         */
+        default void onException(final Exception e) {
+
+        }
+
     }
 
 }

@@ -9,9 +9,9 @@ package io.joyrpc.protocol.telnet.handler;
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -24,7 +24,7 @@ import io.joyrpc.config.ConsumerConfig;
 import io.joyrpc.constants.Constants;
 import io.joyrpc.context.GlobalContext;
 import io.joyrpc.invoker.Exporter;
-import io.joyrpc.invoker.InvokerManager;
+import io.joyrpc.invoker.ServiceManager;
 import io.joyrpc.invoker.Refer;
 import io.joyrpc.transport.channel.Channel;
 import io.joyrpc.transport.telnet.TelnetResponse;
@@ -54,19 +54,17 @@ public class ConfigTelnetHandler extends AbstractTelnetHandler {
         options = new Options()
                 .addOption(HELP_SHORT, HELP_LONG, false, "show help message for command config")
                 .addOption(Option.builder("p")
-                        .hasArg()
-                        .numberOfArgs(2)
+                        .hasArg().numberOfArgs(2).valueSeparator(',')
                         .argName("interface,alias")
                         .desc("Show provider configs")
                         .build())
                 .addOption(Option.builder("c")
-                        .hasArg()
-                        .numberOfArgs(2)
+                        .hasArg().numberOfArgs(2).valueSeparator(',')
                         .argName("interface,alias")
                         .desc("Show consumer configs")
                         .build())
                 .addOption("r", false, "Show global context")
-                .addOption("s", false, "Show all nterface settings")
+                .addOption("s", false, "Show all interface settings")
                 .addOption("g", false, "Show global settings")
                 .addOption("i", false, "Show interface id mapping");
         //.addOption("a", false, "Show all above");
@@ -87,39 +85,50 @@ public class ConfigTelnetHandler extends AbstractTelnetHandler {
         if (args == null) {
             return new TelnetResponse(help());
         }
-        String respMessage = "";
+        String result = "";
         CommandLine cmd = getCommand(options, args);
-        if (cmd.hasOption("p")) {
+        if (cmd.hasOption(HELP_SHORT)) {
+            result = help();
+        } else if (cmd.hasOption("p")) {
             String[] ifaceAndAlias = cmd.getOptionValues("p");
-            Exporter exporter = InvokerManager.getFirstExporter(ifaceAndAlias[0], ifaceAndAlias[1]);
-            if (exporter != null) {
-                respMessage = JSON.get().toJSONString(exporter.getConfig());
+            String alias = ifaceAndAlias.length > 1 ? ifaceAndAlias[1] : null;
+            //输出所有分组
+            StringBuilder builder = new StringBuilder(1024);
+            Map<Integer, Exporter> exporters = ServiceManager.getExporter(ifaceAndAlias[0]);
+            if (exporters != null) {
+                exporters.values().forEach(exporter -> {
+                    if (alias == null || alias.equals(exporter.getAlias())) {
+                        builder.append(JSON.get().toJSONString(exporter.getConfig())).append(LINE);
+                    }
+                });
             }
+            result = builder.toString();
         } else if (cmd.hasOption("c")) {
             String[] ifaceAndAlias = cmd.getOptionValues("c");
-            List<Refer> refers = InvokerManager.getRefers();
+            String alias = ifaceAndAlias.length > 1 ? ifaceAndAlias[1] : null;
+            List<Refer> refers = ServiceManager.getRefers();
+            StringBuilder builder = new StringBuilder(1024);
             for (Refer refer : refers) {
                 ConsumerConfig cc = refer.getConfig();
-                if (cc.getInterfaceClazz().equals(ifaceAndAlias[0]) && cc.getAlias().equals(ifaceAndAlias[1])) {
-                    respMessage = JSON.get().toJSONString(cc);
-                    break;
+                if (refer.getInterfaceName().equals(ifaceAndAlias[0])
+                        && (alias == null || alias.equals(cc.getAlias()))) {
+                    builder.append(JSON.get().toJSONString(cc)).append(LINE);
                 }
             }
+            result = builder.toString();
         } else if (cmd.hasOption("g")) {
-            respMessage = JSON.get().toJSONString(GlobalContext.getInterfaceConfig(Constants.GLOBAL_SETTING));
+            result = JSON.get().toJSONString(GlobalContext.getInterfaceConfig(Constants.GLOBAL_SETTING));
         } else if (cmd.hasOption("r")) {
-            respMessage = JSON.get().toJSONString(GlobalContext.getContext());
+            result = JSON.get().toJSONString(GlobalContext.getContext());
         } else if (cmd.hasOption("s")) {
-            respMessage = JSON.get().toJSONString(GlobalContext.getInterfaceConfigs());
+            result = JSON.get().toJSONString(GlobalContext.getInterfaceConfigs());
         } else if (cmd.hasOption("i")) {
             Map<String, String> ifaceIds = new HashMap<>();
-            InvokerManager.getInterfaceIds().forEach((k, v) -> ifaceIds.put(v, String.valueOf(k)));
-            respMessage = JSON.get().toJSONString(ifaceIds);
-        } else if (cmd.hasOption("h")) {
-            respMessage = help();
+            ServiceManager.getInterfaceIds().forEach((k, v) -> ifaceIds.put(v, String.valueOf(k)));
+            result = JSON.get().toJSONString(ifaceIds);
         } else {
-            respMessage = help();
+            result = help();
         }
-        return new TelnetResponse(respMessage);
+        return new TelnetResponse(result);
     }
 }

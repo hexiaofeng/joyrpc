@@ -9,9 +9,9 @@ package io.joyrpc.spring.boot;
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,44 +20,119 @@ package io.joyrpc.spring.boot;
  * #L%
  */
 
-import io.joyrpc.config.RegistryConfig;
-import io.joyrpc.spring.Prefix;
-import io.joyrpc.spring.ServerBean;
-import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.boot.context.properties.NestedConfigurationProperty;
+import io.joyrpc.spring.*;
+
+import java.util.List;
+import java.util.Map;
 
 /**
- * @description:
+ * RPC配置
  */
-@ConfigurationProperties(prefix = Prefix.CONFIG)
 public class RpcProperties {
-    private String basePackage;
-    @NestedConfigurationProperty
-    private ServerBean serverConfig;
-    @NestedConfigurationProperty
-    private RegistryConfig registryConfig;
 
-    public String getBasePackage() {
-        return basePackage;
+    private List<String> packages;
+    /**
+     * 服务
+     */
+    private ServerBean server;
+    /**
+     * 注册中心
+     */
+    private RegistryBean registry;
+    /**
+     * 消费者
+     */
+    private List<ConsumerBean<?>> consumers;
+    /**
+     * 消费者
+     */
+    private List<ConsumerGroupBean<?>> groups;
+    /**
+     * 服务提供者
+     */
+    private List<ProviderBean<?>> providers;
+    /**
+     * 服务
+     */
+    private List<ServerBean> servers;
+    /**
+     * 注册中心
+     */
+    private List<RegistryBean> registries;
+    /**
+     * 全局参数
+     */
+    private Map<String, String> parameters;
+
+    public List<String> getPackages() {
+        return packages;
     }
 
-    public void setBasePackage(String basePackage) {
-        this.basePackage = basePackage;
+    public void setPackages(List<String> packages) {
+        this.packages = packages;
     }
 
-    public ServerBean getServerConfig() {
-        return serverConfig;
+    public ServerBean getServer() {
+        return server;
     }
 
-    public void setServerConfig(ServerBean serverConfig) {
-        this.serverConfig = serverConfig;
+    public void setServer(ServerBean server) {
+        this.server = server;
     }
 
-    public RegistryConfig getRegistryConfig() {
-        return registryConfig;
+    public RegistryBean getRegistry() {
+        return registry;
     }
 
-    public void setRegistryConfig(RegistryConfig registryConfig) {
-        this.registryConfig = registryConfig;
+    public void setRegistry(RegistryBean registry) {
+        this.registry = registry;
+    }
+
+    public List<ConsumerBean<?>> getConsumers() {
+        return consumers;
+    }
+
+    public void setConsumers(List<ConsumerBean<?>> consumers) {
+        this.consumers = consumers;
+    }
+
+    public List<ConsumerGroupBean<?>> getGroups() {
+        return groups;
+    }
+
+    public void setGroups(List<ConsumerGroupBean<?>> groups) {
+        this.groups = groups;
+    }
+
+    public List<ProviderBean<?>> getProviders() {
+        return providers;
+    }
+
+    public void setProviders(List<ProviderBean<?>> providers) {
+        this.providers = providers;
+    }
+
+    public List<ServerBean> getServers() {
+        return servers;
+    }
+
+    public void setServers(List<ServerBean> servers) {
+        this.servers = servers;
+    }
+
+    public List<RegistryBean> getRegistries() {
+        return registries;
+    }
+
+    public void setRegistries(List<RegistryBean> registries) {
+        this.registries = registries;
+    }
+
+    public Map<String, String> getParameters() {
+        return parameters;
+    }
+
+    public void setParameters(Map<String, String> parameters) {
+        this.parameters = parameters;
     }
 }

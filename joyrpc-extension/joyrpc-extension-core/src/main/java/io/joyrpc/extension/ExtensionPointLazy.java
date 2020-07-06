@@ -9,9 +9,9 @@ package io.joyrpc.extension;
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,12 +20,11 @@ package io.joyrpc.extension;
  * #L%
  */
 
-import io.joyrpc.extension.listener.ExtensionEvent;
-import io.joyrpc.extension.listener.ExtensionListener;
 import io.joyrpc.extension.listener.LoaderEvent;
 
 import java.util.Comparator;
 import java.util.List;
+import java.util.function.Predicate;
 
 /**
  * 延迟加载扩展点
@@ -36,17 +35,16 @@ import java.util.List;
 public class ExtensionPointLazy<T, M> implements ExtensionPoint<T, M> {
 
     protected volatile ExtensionPoint<T, M> delegate;
-
     protected final Class<T> extensible;
     protected final ExtensionLoader loader;
-    protected final Comparator<ExtensionMeta<T, M>> comparator;
+    protected final Comparator<ExtensionMeta<?, ?>> comparator;
     protected final Classify<T, M> classify;
 
     public ExtensionPointLazy(Class<T> extensible) {
         this(extensible, null, null, null);
     }
 
-    public ExtensionPointLazy(Class<T> extensible, Comparator<ExtensionMeta<T, M>> comparator) {
+    public ExtensionPointLazy(Class<T> extensible, Comparator<ExtensionMeta<?, ?>> comparator) {
         this(extensible, null, comparator, null);
     }
 
@@ -54,7 +52,7 @@ public class ExtensionPointLazy<T, M> implements ExtensionPoint<T, M> {
         this(extensible, null, null, classify);
     }
 
-    public ExtensionPointLazy(Class<T> extensible, ExtensionLoader loader, Comparator<ExtensionMeta<T, M>> comparator,
+    public ExtensionPointLazy(Class<T> extensible, ExtensionLoader loader, Comparator<ExtensionMeta<?, ?>> comparator,
                               Classify<T, M> classify) {
         this.extensible = extensible;
         this.loader = loader;
@@ -64,15 +62,12 @@ public class ExtensionPointLazy<T, M> implements ExtensionPoint<T, M> {
 
     protected final ExtensionPoint<T, M> getDelegate() {
         if (delegate == null) {
-            synchronized (extensible) {
+            synchronized (this) {
                 if (delegate == null) {
                     //监听扩展点加载器变更事件，需要重新获取插件
-                    ExtensionManager.addListener(new ExtensionListener() {
-                        @Override
-                        public void onEvent(final ExtensionEvent event) {
-                            if (event instanceof LoaderEvent) {
-                                delegate = null;
-                            }
+                    ExtensionManager.addListener(event -> {
+                        if (event instanceof LoaderEvent) {
+                            delegate = null;
                         }
                     });
                     delegate = ExtensionManager.getOrLoadExtensionPoint(extensible, loader, comparator, classify);

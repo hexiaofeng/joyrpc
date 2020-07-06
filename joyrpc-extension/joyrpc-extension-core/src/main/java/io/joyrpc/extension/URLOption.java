@@ -9,9 +9,9 @@ package io.joyrpc.extension;
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,12 +20,14 @@ package io.joyrpc.extension;
  * #L%
  */
 
+import java.util.function.Supplier;
+
 /**
  * URL配置项
  *
  * @param <T>
  */
-public class URLOption<T> extends Option<T> {
+public class URLOption<T> extends Option<T> implements Cloneable {
     /**
      * 配置项名称
      */
@@ -33,7 +35,7 @@ public class URLOption<T> extends Option<T> {
     /**
      * 选项提供者
      */
-    protected OptionSupplier<T> supplier;
+    protected Supplier<T> supplier;
 
     /**
      * 默认构造函数
@@ -58,7 +60,7 @@ public class URLOption<T> extends Option<T> {
      * @param name
      * @param supplier
      */
-    public URLOption(String name, OptionSupplier<T> supplier) {
+    public URLOption(String name, Supplier<T> supplier) {
         this.name = name;
         this.supplier = supplier;
     }
@@ -88,5 +90,14 @@ public class URLOption<T> extends Option<T> {
             value = supplier.get();
         }
         return value;
+    }
+
+    @Override
+    public URLOption<T> clone() {
+        try {
+            return (URLOption<T>) super.clone();
+        } catch (CloneNotSupportedException ignored) {
+            return null;
+        }
     }
 }

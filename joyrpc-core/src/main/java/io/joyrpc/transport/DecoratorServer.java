@@ -9,9 +9,9 @@ package io.joyrpc.transport;
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -31,10 +31,10 @@ import io.joyrpc.transport.codec.Codec;
 import io.joyrpc.transport.codec.ProtocolAdapter;
 import io.joyrpc.transport.transport.ChannelTransport;
 import io.joyrpc.transport.transport.ServerTransport;
+import io.joyrpc.util.Status;
 
 import java.net.InetSocketAddress;
 import java.util.List;
-import java.util.Objects;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.function.Consumer;
 
@@ -47,12 +47,10 @@ public class DecoratorServer<T extends ServerTransport> implements Server {
     protected T transport;
 
     public DecoratorServer(T server) {
-        this(server == null ? null : server.getUrl(), (T) server);
+        this(server == null ? null : server.getUrl(), server);
     }
 
     public DecoratorServer(URL url, T transport) {
-        Objects.requireNonNull(url, "url can not be null.");
-        Objects.requireNonNull(transport, "transport can not be null.");
         this.url = url;
         this.transport = transport;
     }
@@ -148,5 +146,9 @@ public class DecoratorServer<T extends ServerTransport> implements Server {
     @Override
     public URL getUrl() {
         return url;
+    }
+
+    public T getTransport() {
+        return transport;
     }
 }

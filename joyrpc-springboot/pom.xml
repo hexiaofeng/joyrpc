@@ -5,7 +5,7 @@
     <parent>
         <artifactId>joyrpc</artifactId>
         <groupId>io.joyrpc</groupId>
-        <version>1.0.2-SNAPSHOT</version>
+        <version>1.1.1-SNAPSHOT</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
@@ -16,11 +16,13 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter</artifactId>
+            <scope>provided</scope>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-configuration-processor</artifactId>
             <optional>true</optional>
+            <scope>provided</scope>
         </dependency>
         <dependency>
             <groupId>io.joyrpc</groupId>

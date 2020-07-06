@@ -9,9 +9,9 @@ package io.joyrpc.extension;
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,12 +20,14 @@ package io.joyrpc.extension;
  * #L%
  */
 
+import java.util.function.Supplier;
+
 /**
  * URL配置项，具有两个配置项名称
  *
  * @param <T>
  */
-public class URLBiOption<T> extends Option<T> {
+public class URLBiOption<T> extends Option<T> implements Cloneable {
     /**
      * 配置项名称
      */
@@ -37,7 +39,7 @@ public class URLBiOption<T> extends Option<T> {
     /**
      * 选项提供者
      */
-    protected OptionSupplier<T> supplier;
+    protected Supplier<T> supplier;
 
     /**
      * 默认构造函数
@@ -64,7 +66,7 @@ public class URLBiOption<T> extends Option<T> {
      * @param candidate
      * @param supplier
      */
-    public URLBiOption(String name, String candidate, OptionSupplier<T> supplier) {
+    public URLBiOption(String name, String candidate, Supplier<T> supplier) {
         this.name = name;
         this.candidate = candidate;
         this.supplier = supplier;
@@ -105,5 +107,14 @@ public class URLBiOption<T> extends Option<T> {
             value = supplier.get();
         }
         return value;
+    }
+
+    @Override
+    public URLBiOption<T> clone() {
+        try {
+            return (URLBiOption<T>) super.clone();
+        } catch (CloneNotSupportedException ignored) {
+            return null;
+        }
     }
 }

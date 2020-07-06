@@ -9,9 +9,9 @@ package io.joyrpc.filter.provider;
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -22,9 +22,13 @@ package io.joyrpc.filter.provider;
 
 import io.joyrpc.Invoker;
 import io.joyrpc.Result;
+import io.joyrpc.cluster.distribution.RateLimiter;
+import io.joyrpc.config.InterfaceOption;
+import io.joyrpc.config.InterfaceOption.ProviderMethodOption;
 import io.joyrpc.constants.Constants;
 import io.joyrpc.constants.ExceptionCode;
-import io.joyrpc.context.limiter.LimiterConfiguration;
+import io.joyrpc.context.limiter.LimiterConfiguration.ClassLimiter;
+import io.joyrpc.context.limiter.LimiterConfiguration.Option;
 import io.joyrpc.exception.RateLimiterException;
 import io.joyrpc.extension.Extension;
 import io.joyrpc.extension.URL;
@@ -32,12 +36,8 @@ import io.joyrpc.filter.AbstractProviderFilter;
 import io.joyrpc.filter.ProviderFilter;
 import io.joyrpc.protocol.message.Invocation;
 import io.joyrpc.protocol.message.RequestMessage;
-import io.joyrpc.cluster.distribution.RateLimiter;
 
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-
-import static io.joyrpc.cluster.distribution.RateLimiter.DELIMITER;
 
 /**
  * 限流
@@ -48,52 +48,37 @@ public class LimiterFilter extends AbstractProviderFilter {
     @Override
     public CompletableFuture<Result> invoke(final Invoker invoker, final RequestMessage<Invocation> request) {
         Invocation invocation = request.getPayLoad();
+        ProviderMethodOption methodOption = (ProviderMethodOption) request.getOption();
         //获取接口的限流器
-        Map<String, RateLimiter> classLimiters = LimiterConfiguration.LIMITERS.get(invocation.getClassName());
-        if (classLimiters != null && !classLimiters.isEmpty()) {
+        ClassLimiter classLimiters = methodOption.getLimiter();
+        if (classLimiters != null) {
+            //TODO 优化，可扩展限流策略，支持对不同的来源端、用户级别等进行限流
             //获取应用信息，已经从会话里面恢复为HIDDEN_KEY_APPID
-            String appId = invocation.getAttachment(Constants.HIDDEN_KEY_APPID);
-            if (appId == null) {
-                appId = "";
-            }
+            String appId = invocation.getAttachment(Constants.HIDDEN_KEY_APPID, "");
             String methodName = invocation.getMethodName();
             String alias = invocation.getAlias();
             //限流配置的组合
-            String[] keys = new String[]{
-                    String.join(DELIMITER, "", "", ""),
-                    String.join(DELIMITER, methodName, "", ""),
-                    String.join(DELIMITER, methodName, alias, ""),
-                    String.join(DELIMITER, methodName, alias, appId)
-            };
-            RateLimiter limiter;
-            //按照优先级获取限流配置
-            for (int index = keys.length - 1; index >= 0; index--) {
-                //查找限流器
-                limiter = classLimiters.get(keys[index]);
-                if (limiter != null) {
-                    //找到了最佳限流器
-                    if (!limiter.getPermission()) {
-                        return CompletableFuture.completedFuture(new Result(request.getContext(),
-                                new RateLimiterException("Invocation of " + invocation.getClassName() + "." + methodName + " of app " + appId
-                                        + " is over invoke limit, please wait next period or add upper limit.", ExceptionCode.FILTER_INVOKE_LIMIT)
-                        ));
-                    } else {
-                        break;
-                    }
-                }
+            Option option = new Option(methodName, alias, appId);
+            //获取最佳限流配置
+            RateLimiter limiter = classLimiters.get(option);
+            if (limiter != null && !limiter.getPermission()) {
+                return CompletableFuture.completedFuture(new Result(request.getContext(),
+                        new RateLimiterException("Invocation of " + invocation.getClassName() + "." + methodName + " of app " + appId
+                                + " is over invoke limit, please wait next period or add upper limit.", ExceptionCode.FILTER_INVOKE_LIMIT)
+                ));
             }
-
         }
         return invoker.invoke(request);
     }
 
     @Override
     public boolean test(final URL url) {
-        //该接口启用限流
-        if (Boolean.TRUE.equals(url.getBoolean(Constants.LIMITER_OPTION))) {
-            return true;
-        }
         return false;
+    }
+
+    @Override
+    public boolean test(final InterfaceOption option) {
+        return option.isLimiter();
     }
 
     @Override

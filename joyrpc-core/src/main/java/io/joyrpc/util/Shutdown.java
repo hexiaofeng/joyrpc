@@ -9,9 +9,9 @@ package io.joyrpc.util;
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,6 +20,10 @@ package io.joyrpc.util;
  * #L%
  */
 
+import io.joyrpc.constants.Constants;
+import io.joyrpc.context.GlobalContext;
+import io.joyrpc.extension.MapParametric;
+import io.joyrpc.extension.Parametric;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -28,8 +32,6 @@ import java.util.Comparator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.concurrent.*;
-
-import static io.joyrpc.Plugin.ENVIRONMENT;
 
 /**
  * @date 6/6/2019
@@ -47,26 +49,14 @@ public class Shutdown {
      */
     public static final short DEFAULT_PRIORITY = Short.MAX_VALUE;
     /**
-     * 关闭超时时间
-     */
-    public static final String SHUTDOWN_TIMEOUT = "shutdownTimeout";
-    /**
-     * 优雅关闭
-     */
-    public static final String GRACEFULLY_SHUTDOWN = "gracefullyShutdown";
-    /**
-     * 通知客户端下线超时时间
-     */
-    public static final String OFFLINE_TIMEOUT = "offlineTimeout";
-    /**
-     * 关闭的超时时间
-     */
-    public static long shutdownTimeout = 15000L;
-
-    /**
      * 系统关闭钩子
      */
     protected List<Hook> hooks = new CopyOnWriteArrayList<>();
+
+    /**
+     * 注册
+     */
+    protected boolean register;
 
     /**
      * 是否在关闭
@@ -77,15 +67,7 @@ public class Shutdown {
      * 构造函数
      */
     protected Shutdown() {
-        // 增加jvm关闭事件
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            try {
-                doShutdown().get(ENVIRONMENT.get().getPositive(SHUTDOWN_TIMEOUT, shutdownTimeout), TimeUnit.MILLISECONDS);
-            } catch (InterruptedException e) {
-            } catch (ExecutionException e) {
-            } catch (TimeoutException e) {
-            }
-        }, "Shutdown"));
+
     }
 
     /**
@@ -137,12 +119,34 @@ public class Shutdown {
     }
 
     /**
+     * 延迟注册，如果没有监听器则不用注册
+     */
+    protected synchronized void register() {
+        if (register) {
+            return;
+        }
+        register = true;
+        // 增加jvm关闭事件
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            try {
+                Parametric parametric = new MapParametric(GlobalContext.getContext());
+                doShutdown().get(parametric.getPositiveLong(Constants.SHUTDOWN_TIMEOUT_OPTION),
+                        TimeUnit.MILLISECONDS);
+            } catch (InterruptedException | ExecutionException | TimeoutException ignored) {
+            }
+        }, "Shutdown"));
+    }
+
+    /**
      * 添加系统钩子
      *
      * @param hook
      */
     public static void addHook(final Hook hook) {
         if (hook != null) {
+            if (!INSTANCE.register) {
+                INSTANCE.register();
+            }
             INSTANCE.hooks.add(hook);
         }
     }
@@ -154,7 +158,7 @@ public class Shutdown {
      */
     public static void addHook(final Runnable runnable) {
         if (runnable != null) {
-            INSTANCE.hooks.add(new HookAdapter(runnable));
+            addHook(new HookAdapter(runnable));
         }
     }
 
@@ -216,15 +220,11 @@ public class Shutdown {
         /**
          * 运行
          */
-        protected Runnable runnable;
+        protected Hook hook;
         /**
          * 优先级
          */
         protected int priority;
-        /**
-         * 异步执行
-         */
-        protected boolean async;
 
         public HookAdapter(Runnable runnable) {
             this(runnable, DEFAULT_PRIORITY, false);
@@ -235,18 +235,21 @@ public class Shutdown {
         }
 
         public HookAdapter(Runnable runnable, int priority, boolean async) {
-            this.runnable = runnable;
+            this.hook = !async ? () -> {
+                runnable.run();
+                return CompletableFuture.completedFuture(null);
+            } : () -> CompletableFuture.runAsync(runnable);
             this.priority = priority;
-            this.async = async;
+        }
+
+        public HookAdapter(Hook hook, int priority) {
+            this.hook = hook;
+            this.priority = priority;
         }
 
         @Override
         public CompletableFuture<Void> run() {
-            if (async) {
-                runnable.run();
-                return CompletableFuture.completedFuture(null);
-            }
-            return CompletableFuture.runAsync(runnable);
+            return hook.run();
         }
 
         @Override

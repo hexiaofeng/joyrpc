@@ -9,9 +9,9 @@ package io.joyrpc.transport.transport;
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -29,34 +29,32 @@ import io.joyrpc.protocol.ClientProtocol;
 import io.joyrpc.transport.channel.Channel;
 import io.joyrpc.transport.channel.ChannelHandlerChain;
 import io.joyrpc.transport.channel.ChannelManager;
-import io.joyrpc.transport.channel.ChannelManager.ChannelOpener;
+import io.joyrpc.transport.channel.ChannelManager.Connector;
 import io.joyrpc.transport.codec.Codec;
-import io.joyrpc.transport.event.ReconnectedEvent;
 import io.joyrpc.transport.event.TransportEvent;
-import io.joyrpc.transport.heartbeat.DefaultHeartbeatTrigger;
-import io.joyrpc.transport.heartbeat.HeartbeatManager;
 import io.joyrpc.transport.heartbeat.HeartbeatStrategy;
-import io.joyrpc.transport.message.Message;
+import io.joyrpc.util.Futures;
+import io.joyrpc.util.Status;
 
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.BiConsumer;
+import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.Consumer;
-import java.util.function.Supplier;
 
-import static io.joyrpc.Plugin.*;
+import static io.joyrpc.Plugin.CHANNEL_MANAGER_FACTORY;
+import static io.joyrpc.Plugin.EVENT_BUS;
 import static io.joyrpc.constants.Constants.*;
+import static io.joyrpc.util.Status.*;
 
 /**
- * 抽象的客户端通道
+ * 抽象的客户端通道，不支持并发打开关闭
  */
 public abstract class AbstractClientTransport extends DefaultChannelTransport implements ClientTransport {
-    /**
-     * 状态
-     */
-    protected AtomicReference<Status> status = new AtomicReference<>(Status.CLOSED);
+
+    protected static final AtomicReferenceFieldUpdater<AbstractClientTransport, Status> STATE_UPDATER =
+            AtomicReferenceFieldUpdater.newUpdater(AbstractClientTransport.class, Status.class, "status");
     /**
      * 编解码
      */
@@ -78,10 +76,6 @@ public abstract class AbstractClientTransport extends DefaultChannelTransport im
      */
     protected ThreadPoolExecutor bizThreadPool;
     /**
-     * 心跳管理器
-     */
-    protected HeartbeatManager heartbeatManager;
-    /**
      * 名称
      */
     protected String channelName;
@@ -93,6 +87,18 @@ public abstract class AbstractClientTransport extends DefaultChannelTransport im
      * 客户端协议
      */
     protected ClientProtocol protocol;
+    /**
+     * 打开的结果
+     */
+    protected volatile CompletableFuture<Channel> openFuture;
+    /**
+     * 关闭的结果
+     */
+    protected volatile CompletableFuture<Channel> closeFuture;
+    /**
+     * 状态
+     */
+    protected volatile Status status = CLOSED;
 
     /**
      * 构造函数
@@ -101,11 +107,9 @@ public abstract class AbstractClientTransport extends DefaultChannelTransport im
      */
     public AbstractClientTransport(URL url) {
         super(url);
-        String channelManagerFactory = url.getString(CHANNEL_MANAGER_FACTORY_OPTION);
-        this.channelManager = CHANNEL_MANAGER_FACTORY.getOrDefault(channelManagerFactory).getChannelManager(url);
+        this.channelManager = CHANNEL_MANAGER_FACTORY.getOrDefault(url.getString(CHANNEL_MANAGER_FACTORY_OPTION)).getChannelManager(url);
         this.channelName = channelManager.getChannelKey(this);
         this.publisher = EVENT_BUS.get().getPublisher(EVENT_PUBLISHER_CLIENT_NAME, channelName, EVENT_PUBLISHER_TRANSPORT_CONF);
-        this.heartbeatManager = HEARTBEAT_MANAGER_FACTORY.get().get(url);
     }
 
     @Override
@@ -120,12 +124,10 @@ public abstract class AbstractClientTransport extends DefaultChannelTransport im
                         if (throwable instanceof ConnectionException) {
                             ex[0] = (ConnectionException) throwable;
                         } else {
-                            ex[0] = new ConnectionException("Failed to connect " + url.toString(false, false)
-                                    + ". Cause by: Remote and local address are the same", r.getThrowable());
+                            ex[0] = new ConnectionException(throwable.getMessage(), throwable);
                         }
                     } else {
-                        ex[0] = new ConnectionException("Failed to connect " + url.toString(false, false)
-                                + ". Cause by: Remote and local address are the same");
+                        ex[0] = new ConnectionException("Unknown error.");
                     }
                 }
             } finally {
@@ -141,110 +143,107 @@ public abstract class AbstractClientTransport extends DefaultChannelTransport im
 
     @Override
     public void open(final Consumer<AsyncResult<Channel>> consumer) {
-        if (status.compareAndSet(Status.CLOSED, Status.OPENING)) {
+        if (STATE_UPDATER.compareAndSet(this, CLOSED, OPENING)) {
+            final CompletableFuture<Channel> future = new CompletableFuture<>();
+            final Consumer<AsyncResult<Channel>> c = Futures.chain(consumer, openFuture);
+            openFuture = future;
             channelManager.getChannel(this, r -> {
+                //异步回调再次进行判断，在OPENING可以直接关闭
                 if (r.isSuccess()) {
-                    status.set(Status.OPENED);
-                    channel = r.getResult();
+                    //成功，更新为打开状态
+                    Channel ch = r.getResult();
+                    if (openFuture != future || !STATE_UPDATER.compareAndSet(this, OPENING, OPENED)) {
+                        //OPENING->CLOSING，自动关闭
+                        ch.close(o -> c.accept(new AsyncResult<>(new ConnectionException("state is illegal."))));
+                    } else {
+                        //设置连接，并触发通知
+                        channel = ch;
+                        c.accept(r);
+                    }
+                } else if (openFuture != future) {
+                    //失败
+                    c.accept(r);
                 } else {
-                    status.set(Status.CLOSED);
+                    //失败关闭
+                    future.completeExceptionally(r.getThrowable());
+                    close(o -> consumer.accept(r));
                 }
-                if (consumer != null) {
-                    consumer.accept(r);
-                }
-            }, getChannelOpener());
+            }, getConnector());
         } else if (consumer != null) {
-            switch (status.get()) {
+            switch (status) {
+                case OPENING:
+                    Futures.chain(openFuture, consumer);
+                    break;
                 case OPENED:
+                    //可重入，没有并发调用
                     consumer.accept(new AsyncResult<>(channel));
                     break;
                 default:
-                    consumer.accept(new AsyncResult<>(channel, new IllegalStateException()));
+                    //其它状态不应该并发执行
+                    consumer.accept(new AsyncResult<>(channel, new ConnectionException("state is illegal.")));
             }
         }
     }
 
-    protected abstract ChannelOpener getChannelOpener();
-
     @Override
-    public void reconnect() throws ConnectionException, InterruptedException {
-        CountDownLatch latch = new CountDownLatch(1);
-        ConnectionException[] ex = new ConnectionException[1];
-        reconnect((ch, err) -> {
-            try {
-                if (err != null) {
-                    ex[0] = err instanceof ConnectionException ? (ConnectionException) err : new ConnectionException(err);
-                }
-            } finally {
-                latch.countDown();
+    public void close(final Consumer<AsyncResult<Channel>> consumer) {
+        if (STATE_UPDATER.compareAndSet(this, OPENING, CLOSING)) {
+            closeFuture = new CompletableFuture<>();
+            Futures.chain(openFuture, o -> doClose(Futures.chain(consumer, closeFuture)));
+        } else if (STATE_UPDATER.compareAndSet(this, OPENED, CLOSING)) {
+            //状态从打开到关闭中，该状态只能变更为CLOSED
+            closeFuture = new CompletableFuture<>();
+            doClose(Futures.chain(consumer, closeFuture));
+        } else if (consumer != null) {
+            switch (status) {
+                case CLOSING:
+                    Futures.chain(closeFuture, consumer);
+                    break;
+                case CLOSED:
+                    consumer.accept(new AsyncResult<>(true));
+                    break;
+                default:
+                    consumer.accept(new AsyncResult<>(new IllegalStateException("status is illegal.")));
             }
-        });
-        latch.await();
-        if (ex[0] != null) {
-            throw ex[0];
         }
     }
 
-    @Override
-    public void reconnect(final BiConsumer<Channel, Throwable> action) {
-        if (status.get() == Status.OPENED) {
-            //先关闭channel
-            channel.close(s -> {
-                if (s.isSuccess()) {
-                    //重新获取channel
-                    channelManager.getChannel(this, r -> {
-                        if (r.isSuccess()) {
-                            channel = r.getResult();
-                            //TODO 是否要reconnectedEvent?
-                            publisher.offer(new ReconnectedEvent(r.getResult(), url));
-                            if (action != null) {
-                                action.accept(r.getResult(), null);
-                            }
-                        } else {
-                            publisher.offer(new ReconnectedEvent(r.getResult(), url, r.getThrowable()));
-                            if (action != null) {
-                                action.accept(r.getResult(), r.getThrowable());
-                            }
-                        }
-                    }, getChannelOpener());
-                } else if (action != null) {
-                    action.accept(s.getResult(), s.getThrowable());
-                }
+    /**
+     * 关闭
+     *
+     * @param consumer
+     */
+    protected void doClose(final Consumer<AsyncResult<Channel>> consumer) {
+        if (channel != null) {
+            channel.close(r -> {
+                channel.removeSession(transportId);
+                //channel不设置为null，防止正在处理的请求报空指针错误
+                //channel = null;
+                status = CLOSED;
+                consumer.accept(r);
             });
         } else {
-            if (action != null) {
-                action.accept(channel, new IllegalStateException());
-            }
+            status = CLOSED;
+            consumer.accept(new AsyncResult<>(true));
         }
-
-
     }
 
-    @Override
-    public boolean disconnect() {
-        return status.get() == Status.OPENED && channel.disconnect();
-    }
+
+    /**
+     * 获取连接器
+     *
+     * @return
+     */
+    protected abstract Connector getConnector();
 
     @Override
-    public void disconnect(final Consumer<AsyncResult<Channel>> consumer) {
-        if (status.get() == Status.OPENED) {
-            channel.disconnect(o -> {
-                consumer.accept(o);
-            });
-        } else {
-            consumer.accept(new AsyncResult<>(channel, new IllegalStateException()));
-        }
-
+    public int getRequests() {
+        return requests.get();
     }
 
     @Override
     public void setHeartbeatStrategy(final HeartbeatStrategy heartbeatStrategy) {
         this.heartbeatStrategy = heartbeatStrategy;
-        Supplier<Message> heartbeat = heartbeatStrategy.getHeartbeat();
-        //channel创建的时候回自动添加心跳
-        if (channel != null && heartbeat != null) {
-            heartbeatManager.add(channel, heartbeatStrategy, () -> new DefaultHeartbeatTrigger(channel, url, heartbeatStrategy, publisher));
-        }
     }
 
     @Override
@@ -264,41 +263,12 @@ public abstract class AbstractClientTransport extends DefaultChannelTransport im
 
     @Override
     public Status getStatus() {
-        return status.get();
+        return status;
     }
 
     @Override
     public URL getUrl() {
         return url;
-    }
-
-    @Override
-    public void close(final Consumer<AsyncResult<Channel>> consumer) {
-        //TODO 是否应该关闭publisher
-        final Channel channel = this.channel;
-        if (channel == null) {
-            if (status.get() == Status.CLOSED) {
-                consumer.accept(new AsyncResult<>(new IllegalStateException()));
-            } else {
-                status.set(Status.CLOSED);
-                consumer.accept(new AsyncResult<>(true));
-            }
-        } else {
-            status.set(Status.CLOSING);
-            //共享Transport关闭不关闭Channel，只是计数器减1，所以调用disconnect方法
-            channel.disconnect(e -> {
-                status.set(Status.CLOSED);
-                this.channel.removeSession(this.transportId);
-                this.channel = null;
-                if (consumer != null) {
-                    if (e.isSuccess()) {
-                        consumer.accept(new AsyncResult<>(channel));
-                    } else {
-                        consumer.accept(new AsyncResult<>(channel, e.getThrowable()));
-                    }
-                }
-            });
-        }
     }
 
     @Override

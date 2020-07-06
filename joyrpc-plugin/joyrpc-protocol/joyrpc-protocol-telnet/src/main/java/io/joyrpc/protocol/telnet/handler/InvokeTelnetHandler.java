@@ -12,9 +12,9 @@ package io.joyrpc.protocol.telnet.handler;
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -24,18 +24,19 @@ package io.joyrpc.protocol.telnet.handler;
  */
 
 import io.joyrpc.Result;
+import io.joyrpc.codec.Hex;
 import io.joyrpc.codec.crypto.Encryptor;
+import io.joyrpc.codec.crypto.Signature;
 import io.joyrpc.constants.Constants;
 import io.joyrpc.context.GlobalContext;
-import io.joyrpc.exception.MethodOverloadException;
 import io.joyrpc.exception.SerializerException;
-import io.joyrpc.extension.Parametric;
 import io.joyrpc.invoker.Exporter;
-import io.joyrpc.invoker.InvokerManager;
+import io.joyrpc.invoker.ServiceManager;
 import io.joyrpc.protocol.message.Invocation;
 import io.joyrpc.protocol.message.RequestMessage;
 import io.joyrpc.transport.channel.Channel;
 import io.joyrpc.transport.telnet.TelnetResponse;
+import io.joyrpc.util.GenericMethod;
 import io.joyrpc.util.StringUtils;
 import io.joyrpc.util.network.Ipv4;
 import io.joyrpc.util.network.Lan;
@@ -44,15 +45,18 @@ import org.apache.commons.cli.Options;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.lang.reflect.Method;
-import java.lang.reflect.Parameter;
+import java.lang.reflect.Type;
 import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import static io.joyrpc.Plugin.ENCRYPTOR;
 import static io.joyrpc.Plugin.JSON;
-import static io.joyrpc.util.ClassUtils.getPublicMethod;
+import static io.joyrpc.constants.Constants.ALIAS_EMPTY_OPTION;
+import static io.joyrpc.context.Variable.VARIABLE;
+import static io.joyrpc.util.StringUtils.isEmpty;
 
 /**
  * Invoke命令
@@ -66,8 +70,8 @@ public class InvokeTelnetHandler extends AbstractTelnetHandler {
 
     public InvokeTelnetHandler() {
         options = new Options()
-                .addOption("g", true, "is globle password")
-                .addOption("a", "alias", false, "the alias of the service")
+                .addOption("g", true, "is global password")
+                .addOption("a", "alias", true, "the alias of the service")
                 .addOption("p", "password", true, "invoke -p password com.xxx.XxxService.xxxMethod(1234, \"abcd\", {\"prop\" : \"value\"})")
                 .addOption("t", "token", true, "invoke -p password -t token com.xxx.XxxService.xxxMethod(1234, \"abcd\", {\"prop\" : \"value\"})")
                 .addOption(HELP_SHORT, HELP_LONG, false, "show help message for command invoke");
@@ -110,7 +114,7 @@ public class InvokeTelnetHandler extends AbstractTelnetHandler {
             //获取global
             boolean isGlobal = cmd.hasOption("g") ? true : false;
             //获取password
-            String password = cmd.getOptionValue("p");
+            String password = cmd.getOptionValue(isGlobal ? "g" : "p");
             //获取token
             String token = cmd.getOptionValue("t");
             //获取alias
@@ -138,7 +142,7 @@ public class InvokeTelnetHandler extends AbstractTelnetHandler {
                 return validateRes;
             }
 
-            Exporter exporter = getExporter(interfaceId, alias);
+            Exporter exporter = getExporter(interfaceId, alias == null ? "" : alias);
             if (exporter == null) {
                 return new TelnetResponse("Not found such exported service !");
             } else {
@@ -152,49 +156,35 @@ public class InvokeTelnetHandler extends AbstractTelnetHandler {
 
     /**
      * 调用
-     * @param exporter
-     * @param methodName
-     * @param params
-     * @param token
-     * @param channel
-     * @return
+     * @param exporter 服务
+     * @param methodName 方法名称
+     * @param params 参数
+     * @param token 令牌
+     * @param channel 通道
+     * @return 应答
      */
     protected TelnetResponse invoke(final Exporter exporter, final String methodName, final String params,
                                     final String token, final Channel channel) {
         StringBuilder buf = new StringBuilder();
         //查找类及找方法，不支持重载
         try {
-            Method method = getPublicMethod(exporter.getInterfaceClass(), methodName);
-            Parameter[] parameters = method.getParameters();
-            Object[] paramArgs = new Object[parameters.length];
-            switch (parameters.length) {
-                case 0:
-                    break;
-                case 1:
-                    paramArgs[0] = JSON.get().parseObject(params, parameters[0].getParameterizedType());
-                    break;
-                default:
-                    String value = params;
-                    //解析多参数
-                    if (params.charAt(0) != '[' || params.charAt(params.length() - 1) != ']') {
-                        //非数组
-                        value = "[" + params + "]";
-                    }
-                    final int[] index = new int[]{0};
-                    JSON.get().parseArray(value, o -> {
-                        paramArgs[index[0]] = o.apply(parameters[index[0]].getParameterizedType());
-                        return ++index[0] < parameters.length;
-                    });
-            }
-            long start = System.currentTimeMillis();
-            RequestMessage<Invocation> request = RequestMessage.build(new Invocation(exporter.getInterfaceClass(), method, paramArgs), channel);
-            Invocation invocation = request.getPayLoad();
-            invocation.addAttachment(".telnet", true);
+            Invocation invocation = new Invocation(exporter.getInterfaceName(), exporter.getAlias(), methodName);
+            RequestMessage<Invocation> request = RequestMessage.build(invocation, channel);
+            invocation.addAttachment(Constants.INTERNAL_KEY_TELNET, true);
             if (token != null) {
                 invocation.addAttachment(Constants.HIDDEN_KEY_TOKEN, token);
             }
+            //设置
+            exporter.setup(request);
+            GenericMethod genericMethod = invocation.getGenericMethod();
+            Type[] resolvedTypes = genericMethod.getGenericTypes();
+            invocation.setGenericTypes(resolvedTypes);
+            invocation.setArgsType(genericMethod.getTypes());
+            invocation.setArgs(parse(params, resolvedTypes));
+
+            long start = System.currentTimeMillis();
             CompletableFuture<Result> future = exporter.invoke(request);
-            Result response = future.get();
+            Result response = future.get(Integer.MAX_VALUE, TimeUnit.MILLISECONDS);
             long end = System.currentTimeMillis();
             if (response.isException()) {
                 Throwable e = response.getException();
@@ -207,10 +197,6 @@ public class InvokeTelnetHandler extends AbstractTelnetHandler {
             buf.append("\r\nelapsed: ");
             buf.append(end - start);
             buf.append(" ms.");
-        } catch (NoSuchMethodException e) {
-            buf.append("No such method " + methodName + " in interface " + exporter.getInterfaceName());
-        } catch (MethodOverloadException e) {
-            buf.append("Overload method " + methodName + " in interface " + exporter.getInterfaceName());
         } catch (SerializerException e) {
             buf.append("Invalid json argument, caused by: ").append(e.getMessage());
         } catch (Throwable t) {
@@ -221,54 +207,109 @@ public class InvokeTelnetHandler extends AbstractTelnetHandler {
     }
 
     /**
+     * 解析参数
+     * @param text 文本
+     * @param types 类型
+     * @return 参数数组
+     */
+    protected Object[] parse(final String text, final Type[] types) {
+        Object[] result = new Object[types.length];
+        switch (types.length) {
+            case 0:
+                break;
+            case 1:
+                result[0] = JSON.get().parseObject(text, types[0]);
+                break;
+            default:
+                String value = text;
+                //解析多参数
+                if (text.charAt(0) != '[' || text.charAt(text.length() - 1) != ']') {
+                    //非数组
+                    value = "[" + text + "]";
+                }
+                final int[] index = new int[]{0};
+                JSON.get().parseArray(value, o -> {
+                    result[index[0]] = o.apply(types[index[0]]);
+                    return ++index[0] < types.length;
+                });
+        }
+        return result;
+    }
+
+    /**
      * 获取Invoker对象
-     * @param interfaceId
-     * @param alias
-     * @return
+     * @param interfaceId 接口
+     * @param alias 分组
+     * @return 服务
      */
     protected Exporter getExporter(final String interfaceId, final String alias) {
-        return alias != null ? InvokerManager.getFirstExporter(interfaceId, alias) : InvokerManager.getFirstExporterByInterface(interfaceId);
+        Exporter exporter;
+        if (!isEmpty(alias) || VARIABLE.getBoolean(ALIAS_EMPTY_OPTION)) {
+            exporter = ServiceManager.getFirstExporter(interfaceId, alias == null ? "" : alias);
+        } else {
+            exporter = ServiceManager.getFirstExporterByInterface(interfaceId);
+        }
+        return exporter;
     }
 
     /**
      * 验证调用权限
-     * @param interfaceId
-     * @param password
-     * @param isGlobal
-     * @param channel
-     * @return
+     * @param interfaceId 接口
+     * @param password 密码
+     * @param isGlobal 是否全局
+     * @param channel 通道
+     * @return 应答
      */
     protected TelnetResponse authenticate(final String interfaceId, final String password, final boolean isGlobal, final Channel channel) {
         InetSocketAddress address = channel.getRemoteAddress();
         String remoteIp = Ipv4.toIp(address);
-        Parametric parametric = GlobalContext.asParametric();
         // 注册中心配的密码
-        String invokePassword = !isGlobal ? GlobalContext.asParametric(interfaceId).getString(Constants.SETTING_INVOKE_TOKEN, "")
-                : parametric.getString(Constants.SETTING_SERVER_SUDO_PASSWD, "");
-        Lan lan = new Lan(parametric.getString(Constants.SETTING_SERVER_SUDO_WHITELIST), true);
+        String token;
+        if (!isGlobal) {
+            //接口配置
+            token = GlobalContext.get(interfaceId, Constants.SETTING_INVOKE_TOKEN, "");
+            if (isEmpty(token)) {
+                //全局配置
+                token = VARIABLE.getString(Constants.SETTING_INVOKE_TOKEN);
+            }
+        } else {
+            token = VARIABLE.getString(Constants.SETTING_SERVER_SUDO_PASSWD);
+        }
+        //获取加密算法
+        String cryptoType = VARIABLE.getString(Constants.SETTING_SERVER_SUDO_CRYPTO, SUDO_CRYPTO_TYPE);
+        //获取加密秘钥
+        String cryptoKey = VARIABLE.getString(Constants.SETTING_SERVER_SUDO_CRYPTO_KEY);
+        Encryptor encryptor = ENCRYPTOR.get(cryptoType);
+        Lan lan = new Lan(VARIABLE.getString(Constants.SETTING_SERVER_SUDO_WHITELIST), true);
         // 此处验证密码 设置过sudo passwd可以调用
         Boolean sudo = channel.getAttribute(SUDO_ATTRIBUTE);
         // 本机地址可以直接调用
         if (Ipv4.isLocalIp(remoteIp)) {
             return null;
         } else if (!lan.contains(remoteIp)) {
-            return new TelnetResponse("Remote ip " + remoteIp + " is not in invoke whitelist");
+            return new TelnetResponse("Failure, remote ip " + remoteIp + " is not in invoke whitelist");
         } else if (sudo != null && sudo) {
+            //通过了sudo认证
             return null;
-        } else if (password == null) {
-            return new TelnetResponse("Password is null, please set it by \"invoke -p password \"");
-        } else if (invokePassword == null) { // 没设置密码不让调用
-            return new TelnetResponse("please set password by administrator website.");
+        } else if (isEmpty(password)) {
+            return new TelnetResponse("Failure, password is null, please set it by \"invoke -p password \" or \"invoke -g password \"");
+        } else if (isEmpty(token)) {
+            // 没设置密码不让调用
+            return new TelnetResponse("Failure, token is not configured.");
+        } else if (encryptor == null) {
+            return new TelnetResponse("Failure, encryptor is not found.");
+        } else if (isEmpty(cryptoKey)) {
+            return new TelnetResponse("Failure, cryptoKey is not configured.");
         } else {
             try {
-                //获取加密算法
-                String cryptoType = parametric.getString(Constants.SETTING_SERVER_SUDO_CRYPTO, SUDO_CRYPTO_TYPE);
-                Encryptor encryptor = ENCRYPTOR.get(cryptoType);
-                //获取加密秘钥
-                String cryptoKey = parametric.getString(Constants.SETTING_SERVER_SUDO_CRYPTO_KEY, "");
-                //校验
-                if (!Arrays.equals(encryptor.encrypt(password.getBytes(), cryptoKey.getBytes()), invokePassword.getBytes())) {
-                    return new TelnetResponse("Wrong password [" + password + "], please check it");
+                byte[] sources = password.getBytes(StandardCharsets.UTF_8);
+                byte[] keys = Hex.decode(cryptoKey);
+                byte[] signs = Hex.decode(token);
+                boolean result = encryptor instanceof Signature ? ((Signature) encryptor).verify(sources, keys, signs)
+                        : Arrays.equals(encryptor.encrypt(sources, keys), signs);
+                if (!result) {
+                    //校验不通过
+                    return new TelnetResponse("Failure, wrong password!");
                 }
                 return null;
             } catch (Exception e) {

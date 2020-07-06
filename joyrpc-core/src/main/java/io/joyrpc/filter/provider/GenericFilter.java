@@ -9,9 +9,9 @@ package io.joyrpc.filter.provider;
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -29,6 +29,7 @@ import io.joyrpc.exception.GenericException;
 import io.joyrpc.exception.LafException;
 import io.joyrpc.exception.RpcException;
 import io.joyrpc.extension.Extension;
+import io.joyrpc.extension.URL;
 import io.joyrpc.filter.AbstractProviderFilter;
 import io.joyrpc.filter.ProviderFilter;
 import io.joyrpc.protocol.message.Invocation;
@@ -37,13 +38,10 @@ import io.joyrpc.util.network.Ipv4;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
 
 import static io.joyrpc.Plugin.GENERIC_SERIALIZER;
 import static io.joyrpc.codec.serialization.GenericSerializer.STANDARD;
-import static io.joyrpc.util.ClassUtils.forName;
-import static io.joyrpc.util.ClassUtils.getPublicMethod;
 
 /**
  * @description: 服务端的泛化调用过滤器<br>
@@ -62,10 +60,12 @@ public class GenericFilter extends AbstractProviderFilter {
     @Override
     public CompletableFuture<Result> invoke(final Invoker invoker, final RequestMessage<Invocation> request) {
         Invocation invocation = request.getPayLoad();
-        // 如果是generic请求，
+
         if (!invocation.isGeneric()) {
+            // 如果不是generic请求，直接执行下一filter
             return invoker.invoke(request);
         }
+
         CompletableFuture<Result> future = null;
         GenericSerializer[] serializers = new GenericSerializer[1];
         //把泛化调用进行标准化
@@ -80,16 +80,7 @@ public class GenericFilter extends AbstractProviderFilter {
                 serializers[0] = defSerializer;
             }
             // 根据调用的参数来获取方法及参数类型
-            Object[] genericArgs = invocation.getArgs();
-            Object[] args = serializers[0].deserialize(invocation);
-            String[] argTypes = (String[]) genericArgs[1];
-            if (argTypes == null || argTypes.length == 0) {
-                argTypes = Arrays.stream(args).map(arg -> arg.getClass().getName()).toArray(String[]::new);
-            }
-            invocation.setArgsType(argTypes);
-            invocation.setArgs(args);
-            invocation.setClazz(forName(invocation.getClassName()));
-            invocation.setMethod(getPublicMethod(invocation.getClazz(), invocation.getMethodName()));
+            invocation.setArgs(serializers[0].deserialize(invocation));
         } catch (Exception e) {
             String message = String.format(ExceptionCode.format(ExceptionCode.FILTER_GENERIC_CONVERT) +
                             " Error occurs while processing request %s/%s/%s from channel %s->%s, caused by: %s",
@@ -120,6 +111,11 @@ public class GenericFilter extends AbstractProviderFilter {
             }
         });
 
+    }
+
+    @Override
+    public boolean test(URL url) {
+        return true;
     }
 
     @Override
